@@ -1,0 +1,671 @@
+---
+title: "Week 5 Homework 5"
+output: 
+  pdf_document:
+    toc: true
+    number_sections: true
+  
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Question 8.1 
+
+Describe a situation or problem from your job, everyday life, current events, etc., for which a linear 
+regression model would be appropriate. List some (up to 5) predictors that you might use.  
+
+It is common for my team, who work in esports, to use linear regression in our projects. One example would be to estimate and predict impressions of brand logo designs throughout an esports tournament live broadcast. This way, we can estimate before the event and target sponsors with the information of historical previous branded esports event data. In order to estimate a brand logo impression, we use several predictors :
+
+1. Logo Size
+2. Logo Duration on Screen
+3. Logo Location (Whether it is near the chat box, where people see most, or if it is in the corner etc.)
+4. Audience Size (Number of eyes that watch the logo)
+5. Whether the logo was rotating/moving/static. 
+
+# Question 8.2
+
+Using crime data, use regression (a useful R function is lm or glm) to predict the observed crime rate in a city with the following data: 
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE, results='hide'}
+library(kernlab)
+library(kknn)
+library(tidyverse)
+library(tidymodels)
+library(viridis)
+library(modelr)
+library(factoextra)
+library(dplyr)
+library(ggplot2)
+library(gcookbook)
+library(MASS)
+library(plotly)
+library(ggpubr)
+library(outliers)
+library(reshape)
+library(dplyr)
+library(kableExtra)
+library(forecast)
+library(tidyr)
+library(ggplot2)
+library(Metrics)
+library(GGally)
+library(corrr)
+library(modelr)
+library(car)
+library(reshape2)
+library(GGally)
+library(gridExtra)
+```
+
+## Exploratory Data Analysis
+
+To proceed onto the linear regression model, I will first perform exploratory data analysis to see the relationship between variables and calculate correlations. In order to do so, we first need to understand the data. Here is some data descriptions : 
+
+```{r warning=FALSE, include=FALSE}
+# Importing the uscrime data.
+rmse <- yardstick::rmse
+data <- read.table("uscrime.txt", header = T)
+```
+
+The data represents one response variable, Crime, and 15 other predictor variables. Among them, So, which is the indicator variable for a southern state, is a qualitative variable that ranges between 0 and 1. 0 represents a non-Southern state whereas 1 represents a Southern state. I will take that into consideration as we perform linear regression. Next, I prepared the data without NA values and create correlation plots with Crime, the response. 
+
+```{r warning=FALSE, include=FALSE}
+# Modifying data by removing all rows with any NAs.
+crime <- data %>%
+  drop_na()
+```
+
+
+
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE, fig.show = 'hold',fig.width=10, fig.height=10, fig.cap="Multiple Scatterplot Against Response"}
+
+# Create multiple scatterplots
+plots <- lapply(names(crime)[names(crime) != "Crime"], function(col) {
+  ggplot(crime, aes_string(x = col, y = "Crime"), font_size = 9) +
+    geom_point(col = "darkgreen", size = 3) +
+    labs(x = col, y = "Crime")
+})
+
+# Arrange plots in a grid
+grid.arrange(grobs = plots, ncol = 4, font(size=10))
+
+
+```
+
+\
+\
+
+
+
+Analyzing the multiple scatterplots against Crime, there are a few predictor variables that show a stronger relationship with Crime than others. From these scatterplots, I observed the following relationships: (1) There seems to be a positive linear relationship between Crime and Po1, same for Po2 and Wealth. (2) There seems to be a positive curvilinear relationship between Crime and LF. (3) There seems to be a negative linear relationship between Crime and Prob. (4) There seems to be a correlation between So values and Crime rate. Taking these into account, I will perform more EDA. 
+
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+# Correlation matrix for quantitative variables.
+crime.cor <- crime %>%
+  select(where(is.numeric)) %>%
+  correlate() 
+
+# Reorder the correlation matrix so that 
+crime.cor <- crime.cor %>%
+  rearrange() 
+
+```
+
+
+```{r warning=FALSE, fig.show = 'hold', fig.cap= "Correlation Matrix Part 1"}
+
+first_cor <- crime.cor[,1:8]
+kable(first_cor) %>%
+  kable_styling(position = "center",
+                latex_options = c("scale_down", "hold_position"))
+```
+\
+
+\newpage
+
+
+```{r warning=FALSE, fig.show = 'hold',fig.cap = "Correlation Matrix Part 2"}
+second_cor <- crime.cor[,c(1,9:ncol(crime.cor))]
+kable(second_cor) %>%
+  kable_styling(position = "center",
+                latex_options = c("scale_down", "hold_position"), font_size = 7)
+```
+
+\
+\
+
+```{r echo=FALSE, warning=FALSE,  fig.cap= "Correlation Heat Map"}
+# Compute the correlation matrix
+correlation_matrix <- cor(crime)
+
+
+# Convert the correlation matrix to long format
+correlation_data <- melt(correlation_matrix)
+
+# Plot the heatmap
+ggplot(correlation_data, aes(Var1, Var2, fill=value)) +
+  geom_tile(color="white") +
+  scale_fill_gradient2(low="blue", high="red", mid="white", 
+                       midpoint=0, limit=c(-1,1), space="Lab",
+                       name="Correlation") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, size = 8, hjust = 1), 
+        axis.title.x=element_blank(),
+        axis.title.y=element_blank()) +
+  coord_fixed()  
+  
+```
+
+
+It seems that the predictor variables that have the highest correlations with Crime is Po1, Po2, Wealth, and Prob, as expected. Finally, I will the finish the EDA with subsetting only the ones that has the highest correlations with Crime (correlation (r) >= 0.5). 
+
+
+
+```{r, warning=FALSE, message=FALSE, fig.cap = "High Correlation Predictors"}
+# Compute correlations between response variable and all other variables
+correlations <- sapply(crime[, -which(names(crime) == "Crime")], 
+                       function(col) cor(col, crime$Crime))
+
+# Filter variables with correlations above 0.5
+high_correlation_variables <- names(correlations)[abs(correlations) > 0.5]
+
+# Subset the data to include only high correlation variables
+subset_data <- crime[, c("Crime", high_correlation_variables)]
+
+# Compute the correlation matrix for the subset data
+correlation_matrix <- cor(subset_data)
+kable(correlation_matrix)
+
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, fig.width=5, fig.height=5,fig.cap = "High Correlation Plot"}
+
+ggpairs(subset_data, lower = list(continuous = wrap("cor", cor_method = "pearson"))) + theme_bw()
+```
+
+We can notice that Po1 and Po2 survived the threshold of correlation over 0.5. However, we can also notice that Po1 and Po2 both share high correlation with each other, more than what they share with Crime. This seems like an evidence for multicollinearity, which we should investigate later in the model phase. 
+
+
+## Model 1 - All Variables
+
+For the first step, I will include all variables in the model.
+
+```{r, warning=FALSE}
+# Fit the regression model for Crime with all variables
+LinReg.mod <- lm(Crime ~ ., data = crime)
+summary(LinReg.mod)
+
+```
+
+
+
+The model summary above is explaining a lot of features about the model. First, the F statistics is 8.429 with associated p-value of 3.539e-07. This indicates that the model is quite useful (since the p-value is less than 0.05) in predicting the Crime rate. The adjusted R-squared is 0.7078, which indicates that the model explains about 70.8% of the variability of the response. Some other things to look at are individual variables. The model also performed individual t-tests and the resulted predictor variables that had a p-value less than 0.05 were : M, Ed, Ineq, and Prob. Their corresponding t-values are :  2.106, 3.033, 3.111, and -2.137. Interestingly, we can see that those predictor variables that had high correlation with the response variable is not shown here. A few reasons why that is the case would be : multicollinearity between variables or overfitting (as expected). I will check multicollinearity using VIF and calculate other metrics of the model before moving to the next step. 
+
+
+
+```{r, warning=FALSE}
+residuals <- residuals(LinReg.mod)
+
+squared_errors <- residuals^2
+MSE1 <- mean(squared_errors)
+RMSE1 <- sqrt(MSE1)
+
+```
+
+
+```{r, warning=FALSE}
+vif <- vif(LinReg.mod)
+print(vif)
+
+# Calculate AIC
+AIC_value1 <- AIC(LinReg.mod)
+
+# Calculate BIC
+BIC_value1 <- BIC(LinReg.mod)
+
+model1_metrics <-  c(MSE1 , RMSE1, AIC_value1, BIC_value1)
+model1_metric_names <- c("MSE", "RMSE", "AIC", "BIC")
+
+model1_matrix <- cbind(model1_metrics, model1_metric_names)
+model1_matrix
+
+```
+
+Notice how the MSE and RMSE is quite high and that there were multicollinearity present for Po1, Po2, and Wealth, which were the variables that produced high correlation with the response variable. The results of the model generates the equation below. In the next step, we will proceed without Po2 and wealth variable and see what happens in the model. 
+
+$
+
+Crime = -5984 + 87.83[M] + -3.803[So] + 188.3[Ed] + 192.8[Po1] + -109.4[Po2] + -663.8[LF] + 17.41[M.F] + -0.733[Pop] + 4.204[NW] + -5827[U1] + 167.8[U2] + 0.09617[Wealth] + 70.67[Ineq] + -4855[Prob] + -3.479[Time]
+
+$
+
+## Model 2 - Exclude Variables with Multicollinearity
+
+```{r, warning=FALSE}
+LinReg.mod2 <- lm(Crime ~ . - Po2 -Wealth, data = crime)
+summary(LinReg.mod2)
+
+```
+
+Notice how the Po1 immediately became the most significant predictor for the regression model as we remove Po2. The adjusted R-squared is 0.711, which indicates that the model explains about 71.1% of the variability of the response (this is higher than model 1). The F-statistic is 9.707 with 7.32e-08 as p-value. Other predictor variables that had the low p-value includes : M, Ed, Po1, U2, Ineq, and Prob.
+
+
+
+```{r echo=FALSE, warning=FALSE}
+residuals <- residuals(LinReg.mod2)
+
+squared_errors <- residuals^2
+MSE2 <- mean(squared_errors)
+RMSE2 <- sqrt(MSE2)
+
+vif <- vif(LinReg.mod2)
+print(vif)
+
+# Calculate AIC
+AIC_value2 <- AIC(LinReg.mod2)
+
+# Calculate BIC
+BIC_value2 <- BIC(LinReg.mod2)
+
+BIC_diff1 <- abs(BIC_value1 - BIC_value2)
+model2_metrics <-  c(MSE2 , RMSE2, AIC_value2, BIC_value2, BIC_diff1)
+model2_metric_names <- c("MSE", "RMSE", "AIC", "BIC", "Absolute BIC Difference (model 1 & 2)")
+
+model2_matrix <- cbind(model2_metrics, model2_metric_names)
+model2_matrix
+```
+
+Lastly, I checked VIF of model2 and see no multicollinearity present among variables. When calculated the model accuracy metrics, the RMSE has decreased compared to Model 1. Moreover, the AIC value has slightly decreased and the absolute value of BIC difference between the two models is between 2 and 6, which means that model 2 is "somewhat-likely" better. Here is our second model equation now : 
+
+
+\[
+
+
+Crime = -6041.0176 + 84.0350[M] + 35.2894[So] + 185.9198[Ed] + 105.0940[Po1] + -127.9865[LF] + 20.1254[M.F] + -0.6822[Pop] + 1.3912[NW] + -5748.4126[U1] + 180.7362[U2] + 60.7323[Ineq] + -4517.0792[Prob] + -0.5337[Time]
+
+
+\]
+
+Given the results, I still want to investigate the effect of LF to the crime rate. Since it had a curvilinear relationship with Crime, I will create another variable, LF^2 and input in the next model. 
+
+
+## Model 3 - Introduce Quadratic Term
+
+
+```{r, warning=FALSE}
+# Create a quadratic term for LF
+crime$LF_squared <- crime$LF^2
+
+# Fit the regression model including the quadratic term for LF
+LinReg.mod3 <- lm(Crime ~ . + LF_squared - Po2 - Wealth, data = crime)
+summary(LinReg.mod3)
+```
+Inputting a quadratic term, LF_squared had produced a higher F-statistic with lower p-value than the previous model. The significant predictor variables has become : M, Ed, Po1, LF, U2, Ineq, and LF_squared. 
+
+```{r echo=FALSE, warning=FALSE}
+residuals <- residuals(LinReg.mod3)
+squared_errors <- residuals^2
+MSE3 <- mean(squared_errors)
+RMSE3 <- sqrt(MSE3)
+
+vif <- vif(LinReg.mod3)
+print(vif)
+
+# Calculate AIC
+AIC_value3 <- AIC(LinReg.mod3)
+
+# Calculate BIC
+BIC_value3 <- BIC(LinReg.mod3)
+
+BIC_diff2 <- abs(BIC_value2 - BIC_value3)
+model3_metrics <-  c(MSE3 , RMSE3, AIC_value3, BIC_value3, BIC_diff2)
+model3_metric_names <- c("MSE", "RMSE", "AIC", "BIC", "Absolute BIC Difference (model 2 & 3)")
+
+model3_matrix <- cbind(model3_metrics, model3_metric_names)
+model3_matrix
+```
+
+Although the model RMSE, AIC has decreased compare to the previous model, and the absolute BIC difference with model 2 is between 6 and 10, indicating a "likely" better model, the LF p-value has significantly gotten lower than previous and we can assume some multicollinearity. When performed a VIF, notice how the model LF has high multicollinearity most definitely with LF_squared. I will remove LF in the model and see how the model looks. 
+
+
+```{r echo=FALSE, warning=FALSE}
+# Fit the regression model including the quadratic term for LF
+LinReg.mod4 <- lm(Crime ~ . + LF_squared - Po2 - Wealth -LF, data = crime)
+summary(LinReg.mod4)
+
+residuals <- residuals(LinReg.mod4)
+
+squared_errors <- residuals^2
+MSE4 <- mean(squared_errors)
+RMSE4 <- sqrt(MSE4)
+
+vif <- vif(LinReg.mod4)
+print(vif)
+
+# Calculate AIC
+AIC_value4 <- AIC(LinReg.mod4)
+
+# Calculate BIC
+BIC_value4 <- BIC(LinReg.mod4)
+
+BIC_diff3 <- abs(BIC_value2 - BIC_value4)
+model4_metrics <-  c(MSE4 , RMSE4, AIC_value4, BIC_value4, BIC_diff3)
+model4_metric_names <- c("MSE", "RMSE", "AIC", "BIC", "Absolute BIC Difference (model 2 & 4)")
+
+model4_matrix <- cbind(model4_metrics, model4_metric_names)
+model4_matrix
+
+
+```
+
+Removing LF and keeping LF_squared has made LF_squared insignificant. However, the F-statistic is slightly higher than model 2 (the model before quadratic term was introduced) with lower p-value. Compared to model 2, the model with LF_squared has slightly lower RMSE but higher AIC. When calculated the difference between model 2 and model 3 BIC, the value is between 0 and 2, making this current model "slightly likely" better than model 2. Given the VIF that there is no multicollinearity present and with other metrics, I will choose to continue with the current model :
+
+\[
+
+
+Crime = -6176.3240 + 83.0571[M] + 26.0750[So] + 188.5732[Ed] + 104.3602[Po1] + 21.7104[M.F] + -0.6595[Pop] + 1.6138[NW] + -6005.9540[U1] + 181.7421[U2] + 61.2389[Ineq] + -4522.8553[Prob] + -0.4785[Time] + -285.5077[{LF}^{2}]
+
+
+\]
+
+## Model 4 - Introducing Interaction Term
+
+So far, we now have a quadratic term, LF_squared, that is included in the model. But, I would like to investigate a new interaction term into the model and see its significance. I would like to investigate the two significant predictor variable interaction term, Ineq x Ed, to see if there is a relationship between the income inequality and mean years of schooling of the population aged 25 years or over that affects the crime rate. 
+
+
+```{r echo=FALSE, warning=FALSE}
+# Fit the regression model including the quadratic term for LF
+LinReg.mod5 <- lm(Crime ~ . + LF_squared - Po2 - Wealth -LF + Ineq:Ed, data = crime)
+summary(LinReg.mod5)
+
+residuals <- residuals(LinReg.mod5)
+
+squared_errors <- residuals^2
+MSE5 <- mean(squared_errors)
+RMSE5 <- sqrt(MSE4)
+
+vif <- vif(LinReg.mod5)
+print(vif)
+
+# Calculate AIC
+AIC_value5 <- AIC(LinReg.mod5)
+
+# Calculate BIC
+BIC_value5 <- BIC(LinReg.mod5)
+
+BIC_diff4 <- abs(BIC_value4 - BIC_value5)
+model5_metrics <-  c(MSE5 , RMSE5, AIC_value5, BIC_value5, BIC_diff4)
+model5_metric_names <- c("MSE", "RMSE", "AIC", "BIC", "Absolute BIC Difference (model 4 & 5)")
+
+model5_matrix <- cbind(model5_metrics, model5_metric_names)
+model5_matrix
+```
+
+There is high multicollinearity present as expected when performed a VIF. The interaction term is also insignificant. Compared to the previous model, it has a slightly lower RMSE and AIC. However, the adjusted R-squared is lower than the previous model and since there is multicollinearity present, I will remove the interaction term from now on. 
+
+
+## Model 5 - Removing Less Significant Predictors
+
+Finally, to complete the model, I will remove the less significant predictors from model 4 (one with quadratic term) one by one and see its effect. 
+
+
+```{r warning=FALSE, include=FALSE}
+
+
+
+
+# 1. Remove Time
+
+LinReg.Mod_remove1 <- lm(Crime ~ . + LF_squared - Po2 - Wealth -LF -Time, data = crime)
+
+BIC_removal1 <- BIC(LinReg.Mod_remove1)
+abs_BIC_diff1 <- abs(BIC_value4 - BIC_removal1)
+AIC_removal1 <- AIC(LinReg.Mod_remove1)
+
+
+residuals = residuals(LinReg.Mod_remove1)
+squared_errors <- residuals^2
+MSE1 <- mean(squared_errors)
+RMSE1 <- sqrt(MSE1)
+
+removal_summary1 <- c(summary(LinReg.Mod_remove1)$adj.r.squared, summary(LinReg.Mod_remove1)$fstatistic['value'], MSE1, RMSE1, abs_BIC_diff1, AIC_removal1, AIC_value4)
+
+
+# 1. Remove So
+
+LinReg.Mod_remove2 <- lm(Crime ~ . + LF_squared - Po2 - Wealth -LF -Time -So, data = crime)
+BIC_removal2 <- BIC(LinReg.Mod_remove2)
+abs_BIC_diff2 <- abs(BIC_value4 - BIC_removal2)
+AIC_removal2 <- AIC(LinReg.Mod_remove2)
+
+residuals = residuals(LinReg.Mod_remove2)
+squared_errors <- residuals^2
+MSE2 <- mean(squared_errors)
+RMSE2 <- sqrt(MSE2)
+
+removal_summary2 <- c(summary(LinReg.Mod_remove2)$adj.r.squared, summary(LinReg.Mod_remove2)$fstatistic['value'],MSE2, RMSE2,abs_BIC_diff2, AIC_removal2, AIC_value4)
+
+# 1. Remove LF_squared
+
+LinReg.Mod_remove3 <- lm(Crime ~ . + LF_squared - Po2 - Wealth -LF -Time -So - LF_squared, data = crime)
+
+BIC_removal3 <- BIC(LinReg.Mod_remove3)
+abs_BIC_diff3 <- abs(BIC_value4 - BIC_removal3)
+AIC_removal3 <- AIC(LinReg.Mod_remove3)
+
+
+residuals = residuals(LinReg.Mod_remove3)
+squared_errors <- residuals^2
+MSE3 <- mean(squared_errors)
+RMSE3 <- sqrt(MSE3)
+
+removal_summary3 <- c(summary(LinReg.Mod_remove3)$adj.r.squared, summary(LinReg.Mod_remove3)$fstatistic['value'],MSE3, RMSE3,abs_BIC_diff3, AIC_removal3, AIC_value4)
+
+
+# 4. Remove NW
+
+LinReg.Mod_remove4 <- lm(Crime ~ . + LF_squared - Po2 - Wealth -LF -Time -So - LF_squared -NW, data = crime)
+
+BIC_removal4 <- BIC(LinReg.Mod_remove4)
+abs_BIC_diff4 <- abs(BIC_value4 - BIC_removal4)
+AIC_removal4 <- AIC(LinReg.Mod_remove4)
+
+
+residuals = residuals(LinReg.Mod_remove4)
+squared_errors <- residuals^2
+MSE4<- mean(squared_errors)
+RMSE4 <- sqrt(MSE4)
+
+
+removal_summary4 <- c(summary(LinReg.Mod_remove4)$adj.r.squared, summary(LinReg.Mod_remove4)$fstatistic['value'],MSE4, RMSE4,abs_BIC_diff4, AIC_removal4, AIC_value4)
+
+
+
+#5. Remove Pop & M.F & U1
+
+LinReg.Mod_remove5 <- lm(Crime ~ . - Po2 - Wealth -LF -Time -So - LF_squared -NW -Pop -M.F - U1, data = crime)
+
+BIC_removal5 <- BIC(LinReg.Mod_remove5)
+abs_BIC_diff5 <- abs(BIC_value4 - BIC_removal5)
+AIC_removal5 <- AIC(LinReg.Mod_remove5)
+
+
+residuals = residuals(LinReg.Mod_remove5)
+squared_errors <- residuals^2
+MSE5 <- mean(squared_errors)
+RMSE5 <- sqrt(MSE5)
+
+
+removal_summary5 <- c(summary(LinReg.Mod_remove5)$adj.r.squared, summary(LinReg.Mod_remove5)$fstatistic['value'],MSE5, RMSE5,abs_BIC_diff5, AIC_removal5, AIC_value4)
+
+
+# Remove M
+
+LinReg.Mod_remove6 <- lm(Crime ~ . + LF_squared - Po2 - Wealth -LF -Time -So - LF_squared -NW -Pop -M.F - U1 -M, data = crime)
+
+BIC_removal6 <- BIC(LinReg.Mod_remove6)
+abs_BIC_diff6 <- abs(BIC_value4 - BIC_removal6)
+AIC_removal6 <- AIC(LinReg.Mod_remove6)
+
+
+residuals = residuals(LinReg.Mod_remove6)
+squared_errors <- residuals^2
+MSE6 <- mean(squared_errors)
+RMSE6 <- sqrt(MSE6)
+
+
+removal_summary6 <- c(summary(LinReg.Mod_remove6)$adj.r.squared,summary(LinReg.Mod_remove6)$fstatistic['value'],MSE6, RMSE6, abs_BIC_diff6, AIC_removal6, AIC_value4)
+
+all_summary <- rbind(removal_summary1, removal_summary2, removal_summary3, removal_summary4, removal_summary5, removal_summary6)
+
+row.names(all_summary) <- c("Removed Time", "Removed So", "Removed LF_squared", "Removed NW", "Removed Pop & M.F & U1", "Removed M")
+
+
+```
+
+\newpage
+
+**Reminder - Model 4 : 
+
+\[
+
+
+Crime = -6176.3240 + 83.0571[M] + 26.0750[So] + 188.5732[Ed] + 104.3602[Po1] + 21.7104[M.F] + -0.6595[Pop] + 1.6138[NW] + -6005.9540[U1] + 181.7421[U2] + 61.2389[Ineq] + -4522.8553[Prob] + -0.4785[Time] + -285.5077[{LF}^{2}]
+
+
+\]
+
+
+
+```{r, warning=FALSE, echo=FALSE, fig.cap = "Predictor Removal Model Evaluation"}
+
+all_summary %>%
+  kable(col.names = c("Adjusted R-Squared", "F-Statistic", "MSE", "RMSE", "Abs Diff Between BIC", "AIC", "Model 4 AIC")) %>%
+  kable_styling(position = "center",
+                latex_options = c("striped", "scale_down", "hold_position"),
+                font_size = 6) %>%
+  row_spec(0, bold = T, color = "white", background = "#0062b2" ) %>%
+  column_spec(1, width = "2cm") %>%
+  column_spec(1, width = "2cm") %>%
+  column_spec(1, width = "2cm")
+
+```
+## Final Model 
+
+Given the model comparison, I noticed that up until removing Pop, M.F, and U1, the model became better. However, when removing M, which was one of the significant predictors of model 4, The model accuracy dropped and became more unreliable than before. Therefore, this would be my final model : 
+
+```{r, warning=FALSE}
+
+final_model <- lm(Crime ~ . - Po2 - Wealth -LF -Time -So 
+                  - LF_squared -NW -Pop -M.F - U1, data = crime)
+
+summary(final_model)
+
+```
+
+
+```{r, warning=FALSE, echo=FALSE, fig.show = 'hold',fig.cap="Histogram of Residuals"}
+
+# Extract residuals from the model
+residuals <- residuals(final_model)
+
+# Create a data frame for ggplot
+residuals_df <- data.frame(Residuals = residuals)
+
+# Create a histogram of residuals using ggplot
+ggplot(residuals_df, aes(x = Residuals)) +
+  geom_histogram(binwidth = 50, fill = "skyblue", color = "black") +
+  labs(title = "Histogram of Residuals",
+       x = "Residuals",
+       y = "Frequency")
+
+```
+
+
+
+\
+\
+\
+The histogram of residuals seems to be normally distributed and does not show much skewness. It does show a potential skewness to the right, but it is more close to normal distribution. 
+
+\
+\
+
+
+
+```{r, warning=FALSE ,echo=FALSE, fig.show = 'hold',fig.cap="QQ Plot of Residuals"}
+
+
+# Create QQ plot of final_model
+ggplot(residuals_df, aes(sample = residuals)) +
+  stat_qq() +
+  stat_qq_line(color = "red") +
+  labs(title = "QQ Plot of Residuals",
+       x = "Theoretical Quantiles",
+       y = "Sample Quantiles") +
+  theme_minimal()
+
+```
+
+
+
+
+\
+\
+
+
+The residual QQ-plot also shows some potential outliers but mostly, the data points align well to the line. I will now go ahead and predict using the data values given in the homework. First, I included an equation of the final model for reminder. 
+
+**Reminder - final model : 
+
+\[
+
+
+Crime = -5040.50 + 105.02[M] + 196.47[Ed] + 115.02[Po1] + 89.37[U2] + 67.65[Ineq] + -3801.84[Prob] 
+
+
+\]
+
+
+```{r, warning=FALSE}
+# Storing all data values as dataframe.
+new_data <- data.frame(M = 14.0, So = 0, Ed = 10.0, Po1 = 12.0, Po2 = 15.5, 
+                       LF = 0.640, M.F = 94.0, Pop = 150, NW = 1.1, U1 = 0.120, 
+                       U2 = 3.6, Wealth = 3200, Ineq = 20.1, Prob = 0.04, 
+                       Time = 39.0, LF_squared=0)
+
+# Predict using the final_model
+predictions <- predict(final_model, newdata = new_data)
+print(predictions)
+
+```
+
+Given the parameters, we are 95% confident that the crime rate in 1960 was 1304.245 when percentage of males aged 14–24 in total state population is 14, 10 mean years of schooling, per capita expenditure on police protection in 1960 is 12, unemployment rate of urban males 35–39 is 3.6, income inequality is 20.1, and probability of imprisonment is 0.04. The model explains 73.1% of variance in the crime rate. F-statistic of 21.81 of p-value, 3.418e-11. 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
